@@ -89,6 +89,7 @@ coordinator_loop(Reducer, Mappers) ->
       io:format("mappers initialised"),
       %% Then perform the mappings
       send_data(Mappers,Data),
+      lists:foreach(fun(M) -> stop_async(M) end, Mappers),
       coordinator_loop(Reducer, Mappers, From)
   end.
 
