@@ -84,9 +84,7 @@ coordinator_loop(Reducer, Mappers) ->
       %% Set the reducer into receive mode
       %% Is there a reason to do it synced?
       setup(Reducer, {RedFun, RedInit, length(Data)}),
-      io:format("reducer initialised"),
       lists:foreach(fun(M) -> setup_async(M,MapFun) end,Mappers),
-      io:format("mappers initialised"),
       %% Then perform the mappings
       send_data(Mappers,Data),
       lists:foreach(fun(M) -> stop_async(M) end, Mappers),
@@ -132,7 +130,6 @@ reducer_loop() ->
       %%Fun - the anonymous reducer function
       %%Acc - The accumulator
       %%Missing - The number of transmissions missing
-      io:format("Setup received"),
       reply_ok(From),
       gather_data_from_mappers(From, Fun, Acc, Missing);
   Unknown ->
@@ -141,18 +138,15 @@ reducer_loop() ->
     end.
 
 gather_data_from_mappers(Coordinator, _, Acc, 0) ->
-  io:format("I am now finished"),
   reply_ok(Coordinator, Acc),
   reducer_loop();
 gather_data_from_mappers(Coordinator, Fun, Acc, Missing) ->
-  io:format("Now in correct stage"),
     receive
   stop ->
       io:format("Reducer ~p stopping~n", [self()]),
       ok;
   {data, D} -> %Should probably be something else
       %% Reduce the data here
-      io:format("data received, processing"),
       NewAcc = Fun(D, Acc),
       gather_data_from_mappers(Coordinator, Fun, NewAcc, Missing - 1);
   Unknown ->
@@ -169,7 +163,6 @@ mapper_loop(Reducer) ->
       io:format("Mapper ~p stopping~n", [self()]),
       ok;
   {setup, Fun} ->
-      io:format("Mapper setup ok"),
       mapper_loop(Reducer, Fun);
   Unknown ->
 	    io:format("unknown message in mapper: ~p~n",[Unknown]), 
@@ -185,7 +178,6 @@ mapper_loop(Reducer, Fun) ->
   {data, Data} ->
       %%Actually perform data manipulation
       %%and send to reducer
-      io:format("Mapper received data, processing"),
       data_async(Reducer, Fun(Data)),
       mapper_loop(Reducer, Fun);
 	Unknown ->
