@@ -14,24 +14,31 @@ start(N) ->
     {ok, spawn(fun() -> coordinator_loop(Reducer, Mappers) end)}.
 
 
-stop(Pid) -> ....
+stop(Pid) -> rpc(Pid, stop).
 
-job(CPid, MapFun, RedFun, RedInit, Data) -> ....
-
+job(CPid, MapFun, RedFun, RedInit, Data) ->
+    rpc(CPid, {start, MapFun, RedFun, RedInit, Data}).
 
 %%%% Internal implementation
 
+init(N) ->
+    Reducer = spawn(fun reducer_loop/0),
+    Mappers = init_mappers(N, Reducer),
+    {Reducer, Mappers}.
 
-init(N) -> ....
+init_mappers(0, _) -> [];
+init_mappers(N, Reducer) -> [spawn(fun() -> mapper_loop(Reducer, 
+                                                        fun() -> error("Mapper not initialized") end) 
+                                   end) 
+                             | init_mappers(N-1, Reducer)].
 
-
-%% synchronous communication
+%% Synchronous communication
 
 rpc(Pid, Request) ->
     Pid ! {self(), Request},
     receive
-	{Pid, Response} ->
-	    Response
+        {Pid, Response} ->
+            Response
     end.
 
 reply(From, Msg) ->
@@ -63,14 +70,34 @@ setup_async(Pid, Fun) ->
 
 coordinator_loop(Reducer, Mappers) ->
     receive
-	{From, stop} ->
-	    io:format("~p stopping~n", [self()]),
-	    lists:foreach(fun stop_async/1, Mappers),
-	    stop_async(Reducer),
-	    reply_ok(From);
-	....
+        {From, stop} ->
+            lists:foreach(fun stop_async/1, Mappers),
+            stop_async(Reducer),
+            reply_ok(From);
+        {From, {start, MapFun, RedFun, RedInit, Data}} ->
+            setup_async(Reducer, {self(), RedFun, RedInit, length(Data)}),
+            setup_mappers(Mappers, MapFun),
+            send_data(Mappers, Data),
+            reply(From, coordinator_receive_result()),
+            coordinator_loop(Reducer, Mappers);
+        Unknown -> 
+            io:format("coordinator_loop unknown message: ~p~n",[Unknown]),
+            coordinator_loop(Reducer, Mappers)
     end.
 
+coordinator_receive_result() ->
+    receive
+        {_, {ok, Result}} ->
+            {ok, Result};
+        Unknown ->
+            io:format("coordinator_receive_result unknown message: ~p~n",[Unknown]),
+            coordinator_receive_result()
+    end.
+
+setup_mappers([], _) -> ok;
+setup_mappers([Mapper | Mappers], Fun) ->
+    setup_async(Mapper, Fun),
+    setup_mappers(Mappers, Fun).
 
 send_data(Mappers, Data) ->
     send_loop(Mappers, Mappers, Data).
@@ -87,27 +114,44 @@ send_loop(Mappers, [], Data) ->
 
 reducer_loop() ->
     receive
-	stop -> 
-	    io:format("Reducer ~p stopping~n", [self()]),
-	    ok;
-        ....
+        stop ->
+            ok;
+        {setup, {CPid, RedFun, RedInit, Count}} ->
+            reply_ok(CPid, gather_data_from_mappers(RedFun, RedInit, Count)),
+            reducer_loop();
+        Unknown ->
+            io:format("reducer_loop unknown message: ~p~n", [Unknown]),
+            reducer_loop()
     end.
 
+gather_data_from_mappers(_, Acc, 0) -> Acc;
 gather_data_from_mappers(Fun, Acc, Missing) ->
     receive
-	...
+        stop ->
+            io:format("reducer ~p stopping~n", [self()]),
+            ok;
+        {data, D} ->
+            gather_data_from_mappers(Fun, 
+                                     Fun(D, Acc),
+                                     Missing - 1);
+        Unknown ->
+            io:format("gather_data_from_mappers unknown message: ~p~n",[Unknown]),
+            gather_data_from_mappers(Fun, Acc, Missing)
     end.
-
 
 %%% Mapper
 
 mapper_loop(Reducer, Fun) ->
     receive
-	stop -> 
-	    io:format("Mapper ~p stopping~n", [self()]),
-	    ok;
-	....
-	Unknown ->
-	    io:format("unknown message: ~p~n",[Unknown]), 
-	    mapper_loop(Reducer, Fun)
+        stop ->
+            io:format("Mapper ~p stopping~n", [self()]),
+            ok;
+        {setup, FunNew} ->
+            mapper_loop(Reducer, FunNew);
+        {data, D} ->
+            data_async(Reducer, Fun(D)),
+            mapper_loop(Reducer, Fun);
+        Unknown ->
+            io:format("mapper_loop unknown message: ~p~n",[Unknown]),
+            mapper_loop(Reducer, Fun)
     end.
